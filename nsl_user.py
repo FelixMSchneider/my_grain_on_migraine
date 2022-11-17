@@ -23,17 +23,15 @@ class NslUser:
         self.cs = f"postgresql://{self.USERNAME}:{self.PASSWORD}@{self.HOST}:{self.PORT}/{self.DB}"
         self.engine = db.create_engine(self.cs, echo=False)
         self.featurelist=['migraine_days','temperature', 'airpressure']
+        self.user_attributes=["first_name", "gender", "T_specmax", "specmax_outstanding", "specmax", "specmax_ratio"]
 
     def __str__(self):
-        print_attributes=["first_name", "gender", "T_specmax", "specmax_outstanding", "specmax", "specmax_ratio"]
 
         return_str =        "userId     = " + str(self.user_id) 
 
-        for attr in print_attributes:
+        for attr in self.user_attributes:
             if attr in dir(self):
                 return_str += "\n"+attr+" = " + str(vars(self)[attr]) 
-        #if "gender" in dir(self):
-        #    return_str += "\ngender     = " + self.gender 
     
         if len(self.feature_dict.keys()) > 0:
             return_str += "\n\nFeatures in feature_dict:" 
@@ -241,6 +239,13 @@ class NslUser:
         d = json.loads(gdict)
         self.gender=str(d["gender"])     
 
+    def clear_user_attributes(self):
+        for attr in self.user_attributes:
+            if attr in dir(self):
+                #vars(self)[attr]=None
+                vars(self).pop(attr) 
+        self.feature_dict={}
+
     def get_user_attributes(self):
         query="""
         select user_state from  user_data where user_id="""+str(self.user_id)+""";
@@ -250,15 +255,17 @@ class NslUser:
         
         try:
             first_name=user_dict["data"]["FIRST_NAME"]["value"]
+            self.first_name=first_name.split()[0]
         except:
-            first_name=None
+            self.first_name=None
         
         try:
             gender=user_dict["data"]["GENDER"]["value"]
         except:
             gender="not_defined"
 
-        self.first_name=first_name.split()[0]
+
+
         if gender:
             self.gender=gender.lower() 
 
