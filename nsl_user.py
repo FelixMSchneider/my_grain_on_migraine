@@ -24,10 +24,17 @@ class NslUser:
         self.engine = db.create_engine(self.cs, echo=False)
         self.featurelist=['migraine_days','temperature', 'airpressure']
         self.user_attributes=["first_name", "gender", "T_specmax", "specmax_outstanding", "specmax", "specmax_ratio"]
+        self.db_attributes=["HOST", "PORT", "USERNAME", "DB", "engine"]
 
     def __str__(self):
 
-        return_str =        "userId     = " + str(self.user_id) 
+        return_str =        "" 
+
+        for attr in self.db_attributes:
+            if attr in dir(self):
+                return_str += attr+" = " + str(vars(self)[attr]) +"\n"
+        
+        return_str +=        "\nuserId     = " + str(self.user_id) 
 
         for attr in self.user_attributes:
             if attr in dir(self):
@@ -182,6 +189,22 @@ class NslUser:
             df2[feature] = df[feature]
             self.feature_dict[feature]=df[["event_time", feature]]
 
+    @staticmethod
+    def get_binary_migarine_days(df):
+        if type(df) != pd.DataFrame:
+            print("input has to be as DataFrame")
+            return -1
+        try:
+            data=df["migraine_days"].to_numpy()
+        except:
+            print('DataFrame as no column "migraine_days"')
+            return -1
+        TF=(data==3)+(data==4)
+        data[TF]=0
+        data=np.heaviside(data,0)
+        df["migraine_days"]=data
+        return df
+
 
     def get_migraine_days_sql(self):
         query='''   
@@ -217,27 +240,44 @@ class NslUser:
         self.feature_dict["migraine_days"]=df[["event_time", "iaxis","migraine_days"]]
 
 
-    def plot_feature(self, feature):
-        if feature not in self.feature_dict.keys():
-            df=self.get_feature(feature)
+    def plot_feature(self, feature, day0=0, day1=100):
         if feature not in self.featurelist:
             print("feature not supported")
             print("choose feature from", featurelist)
             return None
-        df=self.get_feature(feature)
+        if feature in self.feature_dict.keys():
+            df_=self.feature_dict[feature]
+            df=df_.copy()
+        else:
+            df=self.get_feature(feature)
+        if feature=="migraine_days":
+            self.get_binary_migarine_days(df)
+            if day1>0:
+                tfilter=((df["iaxis"]>=day0) * (df["iaxis"] < day1))
+                df=df[tfilter]
+
         df=df[["event_time", feature]]
         df.set_index("event_time", inplace=True)
         df.plot()
+        if feature=="migraine_days":  
+            plt.yticks([0,1])
         plt.show()
 
     def get_sex_from_firstname(self):
-        import requests
-        import json
-        request="https://api.genderize.io/?name=" + self.first_name
-        a=requests.request("GET", request)
-        gdict=a.text
-        d = json.loads(gdict)
-        self.gender=str(d["gender"])     
+        import gender_guesser.detector as gender_dec
+        d = gender_dec.Detector()
+        self.gender=d.get_gender(self.first_name)
+
+        #-----------------------------------------------------------#
+        # first solution using web scraping:
+        #import requests
+        #import json
+        #request="https://api.genderize.io/?name=" + self.first_name
+        #a=requests.request("GET", request)
+        #gdict=a.text
+        #d = json.loads(gdict)
+        #self.gender=str(d["gender"])     
+        #-----------------------------------------------------------#
 
     def clear_user_attributes(self):
         for attr in self.user_attributes:
@@ -292,7 +332,7 @@ class NslUser:
             df_uid=df_uid.drop("index", axis=1)
             self.df_all_userID=df_uid
 
-    def get_spectrum(self, data=None, iaxis=None, zeropad=100000, returnspec=False):
+    def get_spectrum(self, data=None, iaxis=None, zeropad=100000, returnspec=False, hanning_win=False):
         
         if not data:
             try:
@@ -312,7 +352,8 @@ class NslUser:
         zeropad=zeropad-len(data)
         # zeropadding to increase resolution in frequency domain
         Yzp=np.r_[Y, np.zeros(zeropad)]
-        #Yzp=Yzp*np.hanning(len(Y))
+        if hanning_win:
+            Yzp=Yzp*np.hanning(len(Yzp))
     
         # Fourier Transformation
         from numpy import fft
@@ -331,19 +372,36 @@ class NslUser:
         if returnspec:
             return freq[1:], spec[1:]/len(data)
 
-    def plotspec(self):
+    def plotspec(self, T1=None, T2=None, xti=None, xtila=None):
         try:
             isinstance(self.spec_dict,dict)
         except:
             print("spec_dict not defined")
             self.get_spectrum()
         self.get_spec_peak()
-        plt.plot([1/self.freq_specmax,1/self.freq_specmax], [-0.1*self.specmax, 1.1*self.specmax], "r--")
-        plt.plot(1/self.spec_dict["freq"],np.abs(self.spec_dict["spec"]))
-        plt.plot([0,100], [0.85*self.specmax,0.85*self.specmax])
-        plt.xlim(0,100)
 
-    def get_spec_peak(self):
+        fig=plt.figure()
+        ax=fig.add_subplot(111)
+        plt.plot([1/self.freq_specmax,1/self.freq_specmax], [-0.1*self.specmax, 1.1*self.specmax], "r--")
+        plt.plot([0,100], [0.85*self.specmax,0.85*self.specmax], "k--")
+        plt.plot(1/self.spec_dict["freq"],np.abs(self.spec_dict["spec"]))
+        plt.xlim(0,100)
+        if xti:
+            ax.set_xticks(xti)
+        if xtila:   
+            ax.set_xticklabels(xtila)
+        if T1:
+            plt.xlim(T1,100)
+        if T2:
+            plt.xlim(0,T2)
+        if T1 and T2:
+            plt.xlim(T1,T2)
+
+
+        ax.set_ylim(-0.2*self.specmax, 1.2*self.specmax)
+        plt.xlabel("T [days]")
+
+    def get_spec_peak(self, T1=5, T2=200, peak_outst_threshold=0.85):
         try:
             isinstance(self.spec_dict,dict)
         except:
@@ -352,8 +410,9 @@ class NslUser:
         freq=self.spec_dict["freq"]
         spec=self.spec_dict["spec"]
 
-        sp_range=((freq>1/200) * (freq <1/5)) 
-        spec_=np.abs(spec[sp_range])
+        sp_range=((freq>1/T2) * (freq <1/T1)) 
+        spec=spec[sp_range]
+        spec_=np.abs(spec)
         freq_=freq[sp_range]
         T_=1/freq_
         sm=spec_==spec_.max()
@@ -361,7 +420,8 @@ class NslUser:
             self.freq_specmax=freq_[sm][0]
             self.T_specmax=round(1/self.freq_specmax,1)
             self.specmax=spec_[sm][0]
-            self.specmax_outstanding = not np.any(np.abs(T_[np.where(spec_>self.specmax*0.85)[0]]-1/self.freq_specmax) > 0.5)
+            self.specmax_phase=np.angle(spec[sm][0])
+            self.specmax_outstanding = not np.any(np.abs(T_[np.where(spec_>self.specmax*peak_outst_threshold)[0]]-1/self.freq_specmax) > 0.5)
             fil=(T_>self.T_specmax+1) + (T_<self.T_specmax-1)
             self.specmax_ratio=round((spec_[fil]/self.specmax).max(),3)
         else:
